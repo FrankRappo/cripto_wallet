@@ -1,0 +1,11 @@
+requests
+base58
+tronpy
+web3
+eth_account
+solders
+tonsdk
+PyNaCl
+ecdsa
+bitcoinutils
+urllib3
