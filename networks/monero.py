@@ -1,11 +1,10 @@
-"""Monero Wallet — generates keys via `monero` lib; send/balance/history
-require a running `monero-wallet-rpc` (not bundled here).
+"""Monero Wallet — генерация ключей через пакет `monero`; баланс/история/отправка
+работают, когда поднят `monero-wallet-rpc` (его автозапускает monero_daemon.py).
 
-v1 reality: only address+key generation works fully. balance/history/send
-return a clear "requires local monero-wallet-rpc" error unless WALLET_RPC_URL
-is configured.
-
-TODO: integrate full monero-wallet-rpc (spawn locally or expect external).
+Если `MONERO_WALLET_RPC` задан и демон отвечает — Wallet() без ключа берёт
+адрес/ключи из открытого в демоне кошелька (единый источник истины). Иначе —
+оффлайн-режим: только генерация адреса/ключей, а balance/history/send вернут
+понятную ошибку «requires local monero-wallet-rpc».
 """
 
 import os
@@ -68,15 +67,28 @@ class Wallet:
     NAME = "Monero"
 
     def __init__(self, private_key: str | None = None):
-        # private_key here = monero "mnemonic" phrase (preferred) or
-        # 32-byte hex seed (treated as spend-key seed)
+        # private_key = mnemonic-фраза или 32-байтный hex-seed (spend-key seed).
+        self._from_daemon = False
+
+        # Если рядом работает monero-wallet-rpc с открытым кошельком и ключ не задан —
+        # берём адрес/ключи из демона (иначе баланс показывался бы для одного кошелька,
+        # а адрес на экране — для другого, случайно сгенерированного).
+        if private_key is None and WALLET_RPC_URL:
+            try:
+                addr = _wallet_call("get_address").get("result", {}).get("address")
+            except Exception:
+                addr = None
+            if addr:
+                self._address = addr
+                self._spend = self._daemon_key("spend_key")
+                self._view = self._daemon_key("view_key")
+                self._phrase = self._daemon_key("mnemonic")
+                self._from_daemon = True
+                return
+
         if private_key:
             try:
-                if " " in private_key:
-                    self._seed = Seed(private_key)
-                else:
-                    # 32-byte hex seed -> use as spend key
-                    self._seed = Seed(private_key)
+                self._seed = Seed(private_key)
             except Exception as e:
                 raise ValueError(f"Invalid Monero key: {e}")
         else:
@@ -86,6 +98,14 @@ class Wallet:
         self._spend = self._seed.secret_spend_key()
         self._view = self._seed.secret_view_key()
         self._phrase = self._seed.phrase
+
+    @staticmethod
+    def _daemon_key(key_type: str) -> str:
+        try:
+            res = _wallet_call("query_key", {"key_type": key_type})
+            return res.get("result", {}).get("key", "")
+        except Exception:
+            return ""
 
     @property
     def address(self) -> str:

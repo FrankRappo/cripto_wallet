@@ -1,4 +1,4 @@
-"""ETH Wallet — Alchemy RPC + web3.py."""
+"""ETH Wallet — keyless public RPC (balance/send) + Etherscan V2 (history)."""
 
 import os
 from datetime import datetime, timezone
@@ -7,12 +7,12 @@ import requests
 from eth_account import Account
 from web3 import Web3
 
-ALCHEMY_KEY = os.environ.get("ALCHEMY_API_KEY", "")
-RPC_URL = (
-    f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_KEY}"
-    if ALCHEMY_KEY
-    else "https://eth.llamarpc.com"  # public fallback for read-only / address gen
-)
+# Keyless public RPC — balance + broadcast (eth_sendRawTransaction). Override via ETH_RPC.
+RPC_URL = os.environ.get("ETH_RPC", "https://ethereum-rpc.publicnode.com")
+# History via Etherscan (free, email-only key — no phone). Recommended, not required.
+ETHERSCAN_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
+ETHERSCAN_API = os.environ.get("ETHERSCAN_API_BASE", "https://api.etherscan.io/v2/api")
+ETH_CHAIN_ID = 1
 
 # USDT ERC20
 USDT_CONTRACT = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
@@ -84,8 +84,6 @@ class Wallet:
         return {"native": eth_balance, "tokens": tokens}
 
     def send(self, to: str, amount: float) -> dict:
-        if not ALCHEMY_KEY:
-            return {"success": False, "txid": None, "error": "ALCHEMY_API_KEY missing"}
         if not self.validate_address(to):
             return {"success": False, "txid": None, "error": "Invalid ETH address"}
         try:
@@ -114,44 +112,52 @@ class Wallet:
             return {"success": False, "txid": None, "error": str(e)}
 
     def get_history(self, limit: int = 20) -> list[dict]:
-        if not ALCHEMY_KEY:
+        # Etherscan V2 — native ETH (txlist) + ERC-20 transfers (tokentx).
+        if not ETHERSCAN_KEY:
             return []
-        try:
-            # Alchemy asset transfers — incoming + outgoing
-            results = []
-            for direction_field, addr_filter in (("to", "in"), ("from", "out")):
-                params = [{
-                    "fromBlock": "0x0",
-                    "toBlock": "latest",
-                    direction_field + "Address": self.address,
-                    "category": ["external", "erc20"],
-                    "maxCount": hex(limit),
-                    "order": "desc",
-                }]
-                r = _rpc("alchemy_getAssetTransfers", params)
-                transfers = r.get("result", {}).get("transfers", [])
-                for t in transfers:
-                    ts = 0
-                    md = t.get("metadata", {})
-                    if md.get("blockTimestamp"):
-                        try:
-                            ts = int(datetime.fromisoformat(
-                                md["blockTimestamp"].replace("Z", "+00:00")
-                            ).timestamp())
-                        except Exception:
-                            ts = 0
-                    results.append({
-                        "txid": t.get("hash"),
-                        "from": t.get("from"),
-                        "to": t.get("to"),
-                        "amount": float(t.get("value") or 0),
-                        "time": _iso(ts),
-                        "direction": addr_filter,
-                    })
-            results.sort(key=lambda x: x["time"], reverse=True)
-            return results[:limit]
-        except Exception:
-            return []
+        addr_lc = self.address.lower()
+        results = []
+        for action, is_token in (("txlist", False), ("tokentx", True)):
+            params = {
+                "chainid": ETH_CHAIN_ID,
+                "module": "account",
+                "action": action,
+                "address": self.address,
+                "startblock": 0,
+                "endblock": 99999999,
+                "page": 1,
+                "offset": max(1, min(limit, 100)),
+                "sort": "desc",
+                "apikey": ETHERSCAN_KEY,
+            }
+            try:
+                r = requests.get(ETHERSCAN_API, params=params, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+            except Exception:
+                continue
+            if str(data.get("status")) != "1":
+                continue
+            for t in (data.get("result") or []):
+                try:
+                    if is_token:
+                        dec = int(t.get("tokenDecimal", "18") or "18")
+                        amount = float(t.get("value", "0")) / (10 ** dec)
+                    else:
+                        amount = float(t.get("value", "0")) / 1e18
+                except (ValueError, TypeError):
+                    amount = 0.0
+                frm = t.get("from", "") or ""
+                results.append({
+                    "txid": t.get("hash", ""),
+                    "from": frm,
+                    "to": t.get("to", "") or "",
+                    "amount": amount,
+                    "time": _iso(int(t.get("timeStamp", 0) or 0)),
+                    "direction": "out" if frm.lower() == addr_lc else "in",
+                })
+        results.sort(key=lambda x: x["time"], reverse=True)
+        return results[:limit]
 
 
 if __name__ == "__main__":
@@ -159,4 +165,5 @@ if __name__ == "__main__":
     print(f"{w.NAME} address: {w.address}")
     print(f"private_key_hex: {w.private_key_hex[:10]}...")
     print(f"valid: {w.validate_address(w.address)}")
-    print(f"ALCHEMY_API_KEY set: {bool(ALCHEMY_KEY)}")
+    print(f"RPC: {RPC_URL}")
+    print(f"ETHERSCAN_API_KEY set: {bool(ETHERSCAN_KEY)}")

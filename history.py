@@ -135,61 +135,95 @@ def _fetch_utxo(symbol: str, address: str, limit: int) -> list[dict]:
 
 
 # ============================================================
-#  ETH — Alchemy getAssetTransfers
+#  ETH — Etherscan V2 (free, email-only key — no phone)
 # ============================================================
-def _fetch_eth(address: str, limit: int) -> list[dict]:
-    key = os.getenv("ALCHEMY_API_KEY", "")
-    if not key:
-        logger.warning("ETH history: ALCHEMY_API_KEY not set")
+ETHERSCAN_API = os.getenv("ETHERSCAN_API_BASE", "https://api.etherscan.io/v2/api")
+ETH_CHAIN_ID = 1
+
+
+def _etherscan_eth(action: str, address: str, limit: int, key: str) -> list[dict]:
+    params = {
+        "chainid": ETH_CHAIN_ID,
+        "module": "account", "action": action, "address": address,
+        "startblock": 0, "endblock": 99999999,
+        "page": 1, "offset": max(1, min(limit, 100)),
+        "sort": "desc", "apikey": key,
+    }
+    data = _http_get(ETHERSCAN_API, params=params)
+    if not isinstance(data, dict):
         return []
-    url = f"https://eth-mainnet.g.alchemy.com/v2/{key}"
+    if str(data.get("status")) != "1":
+        msg = str(data.get("message", ""))
+        if "No transactions" not in msg and "No records" not in msg:
+            logger.warning("Etherscan %s: %s", action, msg)
+        return []
+    return data.get("result") or []
+
+
+def _fetch_eth(address: str, limit: int) -> list[dict]:
+    key = os.getenv("ETHERSCAN_API_KEY", "")
+    if not key:
+        logger.warning("ETH history: ETHERSCAN_API_KEY not set")
+        return []
     addr_lc = address.lower()
-    categories = ["external", "internal", "erc20"]
     items: list[dict] = []
-    for direction, key_field, val_field in (
-        ("out", "fromAddress", "from"),
-        ("in", "toAddress", "to"),
-    ):
-        payload = {
-            "jsonrpc": "2.0", "id": 1, "method": "alchemy_getAssetTransfers",
-            "params": [{
-                key_field: address,
-                "category": categories,
-                "withMetadata": True,
-                "maxCount": hex(max(1, min(limit, 1000))),
-                "order": "desc",
-                "excludeZeroValue": False,
-            }],
-        }
-        res = _http_post(url, payload)
-        if not res:
-            continue
-        transfers = ((res.get("result") or {}).get("transfers")) or []
-        for t in transfers:
-            meta = t.get("metadata") or {}
-            ts_iso = meta.get("blockTimestamp", "") or ""
-            try:
-                block = int(t.get("blockNum", "0x0"), 16)
-            except (ValueError, TypeError):
-                block = 0
-            amt = t.get("value")
-            try:
-                amount = float(amt) if amt is not None else 0.0
-            except (ValueError, TypeError):
-                amount = 0.0
-            sym = (t.get("asset") or "ETH")
-            items.append({
-                "txid": t.get("hash", ""),
-                "from": t.get("from", ""),
-                "to": t.get("to", ""),
-                "amount": amount,
-                "symbol": sym,
-                "time": ts_iso,
-                "direction": direction,
-                "block": block,
-                "fee": 0.0,
-                "status": "confirmed",
-            })
+
+    # native ETH transfers
+    for t in _etherscan_eth("txlist", address, limit, key):
+        from_addr = t.get("from", "") or ""
+        try:
+            amount = float(t.get("value", "0")) / 1e18
+        except (ValueError, TypeError):
+            amount = 0.0
+        try:
+            fee = (int(t.get("gasUsed", "0")) * int(t.get("gasPrice", "0"))) / 1e18
+        except (ValueError, TypeError):
+            fee = 0.0
+        try:
+            block = int(t.get("blockNumber", "0"))
+        except (ValueError, TypeError):
+            block = 0
+        items.append({
+            "txid": t.get("hash", ""),
+            "from": from_addr,
+            "to": t.get("to", "") or "",
+            "amount": amount,
+            "symbol": "ETH",
+            "time": _iso_from_ts(t.get("timeStamp", 0)),
+            "direction": "out" if from_addr.lower() == addr_lc else "in",
+            "block": block,
+            "fee": fee,
+            "status": "failed" if str(t.get("isError", "0")) == "1" else "confirmed",
+        })
+
+    # ERC-20 token transfers (USDT etc.)
+    for t in _etherscan_eth("tokentx", address, limit, key):
+        from_addr = t.get("from", "") or ""
+        try:
+            dec = int(t.get("tokenDecimal", "18") or "18")
+        except (ValueError, TypeError):
+            dec = 18
+        try:
+            amount = float(t.get("value", "0")) / (10 ** dec)
+        except (ValueError, TypeError):
+            amount = 0.0
+        try:
+            block = int(t.get("blockNumber", "0"))
+        except (ValueError, TypeError):
+            block = 0
+        items.append({
+            "txid": t.get("hash", ""),
+            "from": from_addr,
+            "to": t.get("to", "") or "",
+            "amount": amount,
+            "symbol": t.get("tokenSymbol", "ERC20") or "ERC20",
+            "time": _iso_from_ts(t.get("timeStamp", 0)),
+            "direction": "out" if from_addr.lower() == addr_lc else "in",
+            "block": block,
+            "fee": 0.0,
+            "status": "confirmed",
+        })
+
     # dedup by (txid, direction, amount, symbol)
     seen = set()
     uniq = []
@@ -266,11 +300,15 @@ def _fetch_bsc(address: str, limit: int) -> list[dict]:
 # ============================================================
 #  SOL — Helius
 # ============================================================
+SOL_RPC = os.getenv("SOL_RPC", "https://solana-rpc.publicnode.com")
+LAMPORTS_PER_SOL = 1_000_000_000
+
+
 def _fetch_sol(address: str, limit: int) -> list[dict]:
+    # Helius обогащает/ускоряет, но не обязателен — без ключа идём через публичный RPC.
     key = os.getenv("HELIUS_API_KEY", "")
     if not key:
-        logger.warning("SOL history: HELIUS_API_KEY not set")
-        return []
+        return _fetch_sol_rpc(address, limit)
     base = f"https://api.helius.xyz/v0/addresses/{address}/transactions"
     data = _http_get(base, params={"api-key": key, "limit": max(1, min(limit, 100))})
     if not isinstance(data, list):
@@ -313,6 +351,59 @@ def _fetch_sol(address: str, limit: int) -> list[dict]:
             "amount": amount,
             "symbol": "SOL",
             "time": ts_iso,
+            "direction": direction,
+            "block": block,
+            "fee": fee,
+            "status": status,
+        })
+    return items
+
+
+def _fetch_sol_rpc(address: str, limit: int) -> list[dict]:
+    """SOL история без ключа — публичный RPC (getSignaturesForAddress + getTransaction)."""
+    sigs = _http_post(SOL_RPC, {
+        "jsonrpc": "2.0", "id": 1, "method": "getSignaturesForAddress",
+        "params": [address, {"limit": max(1, min(limit, 100))}],
+    })
+    sig_list = (sigs or {}).get("result") or []
+    items = []
+    for s in sig_list[:limit]:
+        txid = s.get("signature", "")
+        ts = s.get("blockTime") or 0
+        block = int(s.get("slot") or 0)
+        status = "failed" if s.get("err") else "confirmed"
+        amount, fee = 0.0, 0.0
+        from_addr, to_addr, direction = "", "", "in"
+        txres = _http_post(SOL_RPC, {
+            "jsonrpc": "2.0", "id": 1, "method": "getTransaction",
+            "params": [txid, {"encoding": "json", "maxSupportedTransactionVersion": 0}],
+        })
+        tx = (txres or {}).get("result") or {}
+        meta = tx.get("meta") or {}
+        try:
+            fee = float(meta.get("fee", 0) or 0) / LAMPORTS_PER_SOL
+        except (ValueError, TypeError):
+            fee = 0.0
+        pre = meta.get("preBalances") or []
+        post = meta.get("postBalances") or []
+        acct_keys = ((tx.get("transaction") or {}).get("message") or {}).get("accountKeys") or []
+        my_idx = next((i for i, k in enumerate(acct_keys) if k == address), -1)
+        if 0 <= my_idx < len(pre) and my_idx < len(post):
+            delta = (post[my_idx] - pre[my_idx]) / LAMPORTS_PER_SOL
+            direction = "in" if delta >= 0 else "out"
+            amount = abs(delta)
+        other = next((k for k in acct_keys if k != address), None)
+        if direction == "in":
+            from_addr, to_addr = other or "", address
+        else:
+            from_addr, to_addr = address, other or ""
+        items.append({
+            "txid": txid,
+            "from": from_addr,
+            "to": to_addr,
+            "amount": amount,
+            "symbol": "SOL",
+            "time": _iso_from_ts(ts) if ts else "",
             "direction": direction,
             "block": block,
             "fee": fee,
@@ -486,11 +577,55 @@ def _hex_to_tron(hex_addr: str) -> str:
 
 
 # ============================================================
-#  XMR — wallet-rpc required, stub
+#  XMR — через локальный monero-wallet-rpc (его автозапускает monero_daemon)
 # ============================================================
+ATOMIC_XMR = 1_000_000_000_000
+
+
 def _fetch_xmr(address: str, limit: int) -> list[dict]:
-    logger.warning("Monero history requires wallet-rpc")
-    return []
+    url = os.getenv("MONERO_WALLET_RPC", "")
+    if not url:
+        logger.warning("Monero history requires monero-wallet-rpc (MONERO_WALLET_RPC)")
+        return []
+    res = _http_post(url, {
+        "jsonrpc": "2.0", "id": "0", "method": "get_transfers",
+        "params": {"in": True, "out": True},
+    })
+    if not isinstance(res, dict):
+        return []
+    result = res.get("result") or {}
+    items = []
+    for direction in ("in", "out"):
+        for t in (result.get(direction) or []):
+            try:
+                amount = int(t.get("amount", 0) or 0) / ATOMIC_XMR
+            except (ValueError, TypeError):
+                amount = 0.0
+            try:
+                fee = int(t.get("fee", 0) or 0) / ATOMIC_XMR
+            except (ValueError, TypeError):
+                fee = 0.0
+            if direction == "out":
+                dests = t.get("destinations") or []
+                to_addr = dests[0].get("address", "") if dests else ""
+                from_addr = address
+            else:
+                to_addr = t.get("address", "") or address
+                from_addr = ""
+            items.append({
+                "txid": t.get("txid", ""),
+                "from": from_addr,
+                "to": to_addr,
+                "amount": amount,
+                "symbol": "XMR",
+                "time": _iso_from_ts(t.get("timestamp", 0)),
+                "direction": direction,
+                "block": int(t.get("height", 0) or 0),
+                "fee": fee,
+                "status": "pending" if t.get("type") in ("pending", "pool") else "confirmed",
+            })
+    items.sort(key=lambda x: x.get("time", ""), reverse=True)
+    return items[:limit]
 
 
 # ============================================================

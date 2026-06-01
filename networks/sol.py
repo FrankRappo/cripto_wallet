@@ -13,10 +13,10 @@ from solders.system_program import TransferParams, transfer
 from solders.transaction import Transaction
 
 HELIUS_KEY = os.environ.get("HELIUS_API_KEY", "")
-RPC_URL = (
+RPC_URL = os.environ.get("SOL_RPC", "") or (
     f"https://mainnet.helius-rpc.com/?api-key={HELIUS_KEY}"
     if HELIUS_KEY
-    else "https://api.mainnet-beta.solana.com"
+    else "https://solana-rpc.publicnode.com"  # keyless public fallback
 )
 
 LAMPORTS_PER_SOL = 1_000_000_000

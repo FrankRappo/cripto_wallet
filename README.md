@@ -20,10 +20,24 @@ python3 final_skript.py
 ```
 
 ## API-ключи
-- `ALCHEMY_API_KEY` (ETH)
-- `HELIUS_API_KEY` (SOL)
-- `TONCENTER_API_KEY` (TON)
+- `ETHERSCAN_API_KEY` (ETH — только история; регистрация по email, без телефона)
+- `HELIUS_API_KEY` (SOL, опционально — баланс/история работают и без него)
+- `TONCENTER_API_KEY` (TON — нужен для отправки)
 - `BSCSCAN_API_KEY` (BSC, опционально)
 - `TRONGRID_API_KEY` (TRX)
+- `ETH_RPC`, `SOL_RPC` (опционально — свои узлы; по умолчанию публичные PublicNode)
 
-BTC, LTC, Monero, CoinGecko, MOEX — без ключей.
+ETH (баланс/отправка) и SOL (баланс/отправка/история) работают **без ключей**
+через публичные RPC. Helius для SOL — лишь опциональный ускоритель.
+BTC, LTC, CoinGecko, MOEX — без ключей.
+
+## Monero
+Баланс/история/отправка требуют локального `monero-wallet-rpc` — `final_skript.py`
+**автоматически поднимает его на старте** (если настроены `MONERO_*` в `.env`):
+- бинарь — `vendor/monero/monero-wallet-rpc` (CLI-bundle с getmonero.org);
+- кошелёк — `.monero/<MONERO_WALLET_NAME>` (создаётся отдельно, см. `.env.example`);
+- нода — удалённая публичная (`MONERO_DAEMON_ADDR`), полную цепочку качать не нужно.
+
+Демон работает как сервис (переживает выход CLI); повторный запуск его переиспользует.
+Без `MONERO_*` Monero остаётся в режиме «только генерация адресов».
+Каталоги `vendor/` и `.monero/` в git не коммитятся (см. `.gitignore`).

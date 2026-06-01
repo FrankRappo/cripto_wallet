@@ -17,10 +17,35 @@ from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 import urllib3
 
+
+def _load_dotenv(path: str | None = None) -> None:
+    """Минимальный загрузчик .env (без зависимостей).
+
+    Вызывается ДО импорта networks/* — модули читают ключи на этапе импорта.
+    Уже заданные переменные окружения не перезатираются.
+    """
+    path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k:
+                    os.environ.setdefault(k, v)
+    except OSError:
+        pass
+
+
+_load_dotenv()
+
 import utils
 import rates
 import volatility
 import history
+import monero_daemon
 from networks import btc as net_btc
 from networks import ltc as net_ltc
 from networks import eth as net_eth
@@ -521,6 +546,8 @@ def choose_network() -> str | None:
 # === CLI ===
 def main_menu():
     utils.print_startup_banner()
+    # XMR: поднимаем monero-wallet-rpc (если настроен в .env) — баланс/история/отправка.
+    monero_daemon.ensure_monero_rpc()
 
     wallet = None
     symbol = None
