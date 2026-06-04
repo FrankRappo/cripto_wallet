@@ -18,6 +18,37 @@ import time
 import urllib.request
 
 
+def _resolve_bin(bin_: str) -> str:
+    """Возвращает путь к бинарю с учётом ОС.
+
+    На Windows бинарь называется `monero-wallet-rpc.exe`; в .env можно указать
+    путь как с расширением, так и без — добавим `.exe`, если так файл находится.
+    """
+    if not bin_:
+        return bin_
+    if os.path.exists(bin_):
+        return bin_
+    if os.name == "nt" and not bin_.lower().endswith(".exe"):
+        cand = bin_ + ".exe"
+        if os.path.exists(cand):
+            return cand
+    return bin_
+
+
+def _detached_popen_kwargs() -> dict:
+    """Флаги запуска фонового процесса-«сервиса», переживающего выход CLI.
+
+    POSIX: start_new_session=True (новая сессия, отвязка от управляющего терминала).
+    Windows: аргумента start_new_session нет — нужны creationflags
+    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP.
+    """
+    if os.name == "nt":
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        return {"creationflags": DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
 def _rpc(url: str, method: str, params: dict | None = None, timeout: int = 5) -> dict:
     data = json.dumps(
         {"jsonrpc": "2.0", "id": "0", "method": method, "params": params or {}}
@@ -48,7 +79,7 @@ def ensure_monero_rpc(verbose: bool = True, wait_seconds: int = 40) -> bool:
     if is_up(url):
         return True
 
-    bin_ = os.environ.get("MONERO_WALLET_RPC_BIN", "")
+    bin_ = _resolve_bin(os.environ.get("MONERO_WALLET_RPC_BIN", ""))
     wdir = os.environ.get("MONERO_WALLET_DIR", "")
     name = os.environ.get("MONERO_WALLET_NAME", "")
     pw = os.environ.get("MONERO_WALLET_PASSWORD", "")
@@ -61,12 +92,14 @@ def ensure_monero_rpc(verbose: bool = True, wait_seconds: int = 40) -> bool:
             print("ℹ️  XMR: monero-wallet-rpc не настроен — доступна только генерация адресов.")
         return False
 
-    # Пароль во временный файл (чтобы не светить в `ps`), 0600.
+    # Пароль во временный файл (чтобы не светить в `ps`), 0600 на POSIX.
     pw_file = os.path.join(wdir, ".rpc-pw")
     try:
         with open(pw_file, "w", encoding="utf-8") as f:
             f.write(pw)
-        os.chmod(pw_file, 0o600)
+        # chmod 0600 имеет смысл только на POSIX; на Windows ACL другие — пропускаем.
+        if os.name != "nt":
+            os.chmod(pw_file, 0o600)
     except OSError as e:
         if verbose:
             print(f"⚠️  XMR: не удалось подготовить запуск: {e}")
@@ -91,7 +124,8 @@ def ensure_monero_rpc(verbose: bool = True, wait_seconds: int = 40) -> bool:
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,  # переживает выход CLI — работает как сервис
+            # переживает выход CLI — работает как сервис (POSIX/Windows, см. helper)
+            **_detached_popen_kwargs(),
         )
     except OSError as e:
         if verbose:

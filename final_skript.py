@@ -6,11 +6,28 @@ TRX-функции (Stake V1/V2, диагностика заморозок) со
 
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 
 import requests
 import base58
+
+
+def _enable_utf8_console() -> None:
+    """Windows: консоль (cmd/PowerShell) по умолчанию не UTF-8 — эмодзи в выводе
+    (✅ ⚠️ 💾) и кириллица могут ронять print() через UnicodeEncodeError.
+    Переключаем потоки на UTF-8. На POSIX это no-op (там и так UTF-8)."""
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr, sys.stdin):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+
+_enable_utf8_console()
 
 from tronpy import Tron
 from tronpy.keys import PrivateKey
