@@ -5,12 +5,12 @@ chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
 
-if not exist ".venv" (
+if not exist ".venv\Scripts\python.exe" (
   echo ==^> .venv не найден -- запускаю первичную установку (setup.bat^)
   call setup.bat
   if errorlevel 1 exit /b 1
 )
 
-call ".venv\Scripts\activate.bat"
-python final_skript.py
+REM Зовём venv-питон напрямую (без activate) -- так папку можно свободно переименовать.
+".venv\Scripts\python.exe" final_skript.py
 endlocal

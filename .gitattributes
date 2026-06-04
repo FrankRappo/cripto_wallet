@@ -1,0 +1,9 @@
+# Windows-скрипты обязаны иметь CRLF: на LF-концах cmd.exe ломает блоки if(...)
+# и каретку ^> (создаёт файлы-мусор вместо echo). Без этого setup.bat/run.bat
+# не работают при клоне на Windows.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Unix-скрипты — строго LF.
+*.sh   text eol=lf

@@ -64,3 +64,17 @@ BTC, LTC, CoinGecko, MOEX — без ключей.
 на Windows путь к бинарю можно указывать без `.exe` — он подставится автоматически.
 Без `MONERO_*` Monero остаётся в режиме «только генерация адресов».
 Каталоги `vendor/` и `.monero/` в git не коммитятся (см. `.gitignore`) — бинарь у каждого свой под ОС.
+
+### Monero на Windows — два важных нюанса
+1. **Путь к проекту только латиницей** (`C:\cripto\...`, не `C:\крипто\...`). `monero-wallet-rpc`
+   на Windows не открывает файлы кошелька по не-ASCII (кириллическому) пути — падает с
+   `system:3 / "opened by another wallet program"`. Остальные сети работают на любом пути.
+2. **Windows Defender удаляет `monero-wallet-rpc.exe`** (ложноположительное срабатывание
+   на Monero-бинари). Добавьте папку в исключения — в PowerShell **от администратора**:
+   ```powershell
+   Add-MpPreference -ExclusionPath 'C:\cripto'
+   ```
+   затем верните бинарь: `powershell -ExecutionPolicy Bypass -File scripts\get_monero.ps1`.
+
+Пароль кошелька на Windows передаётся `monero-wallet-rpc` аргументом `--password` (на POSIX —
+через файл `0600`): узкочарный ридер password-файла на Windows тоже спотыкается на не-ASCII путях.

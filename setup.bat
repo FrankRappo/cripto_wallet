@@ -21,16 +21,14 @@ if not defined PY (
 echo ==^> Python:
 %PY% --version
 
-if not exist ".venv" (
+if not exist ".venv\Scripts\python.exe" (
   echo ==^> Создаю виртуальное окружение .venv
   %PY% -m venv .venv
 )
 
-call ".venv\Scripts\activate.bat"
-
 echo ==^> Обновляю pip и ставлю зависимости
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+".venv\Scripts\python.exe" -m pip install --upgrade pip
+".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 (
   echo [ОШИБКА] Не удалось установить зависимости.
   exit /b 1

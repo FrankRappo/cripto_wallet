@@ -92,23 +92,9 @@ def ensure_monero_rpc(verbose: bool = True, wait_seconds: int = 40) -> bool:
             print("ℹ️  XMR: monero-wallet-rpc не настроен — доступна только генерация адресов.")
         return False
 
-    # Пароль во временный файл (чтобы не светить в `ps`), 0600 на POSIX.
-    pw_file = os.path.join(wdir, ".rpc-pw")
-    try:
-        with open(pw_file, "w", encoding="utf-8") as f:
-            f.write(pw)
-        # chmod 0600 имеет смысл только на POSIX; на Windows ACL другие — пропускаем.
-        if os.name != "nt":
-            os.chmod(pw_file, 0o600)
-    except OSError as e:
-        if verbose:
-            print(f"⚠️  XMR: не удалось подготовить запуск: {e}")
-        return False
-
     cmd = [
         bin_,
         "--wallet-file", wallet_file,
-        "--password-file", pw_file,
         "--rpc-bind-ip", "127.0.0.1",
         "--rpc-bind-port", str(port),
         "--disable-rpc-login",
@@ -117,6 +103,25 @@ def ensure_monero_rpc(verbose: bool = True, wait_seconds: int = 40) -> bool:
         "--log-file", os.path.join(wdir, "wallet-rpc.log"),
         "--max-concurrency", "1",
     ]
+
+    if os.name == "nt":
+        # На Windows чтение --password-file ломается на не-ASCII путях (например
+        # кириллица в пути): "the password file specified could not be read".
+        # Передаём пароль аргументом — argv приходит в Unicode. Демон слушает только
+        # 127.0.0.1 (single-user), поэтому видимость пароля в локальном tasklist приемлема.
+        cmd += ["--password", pw]
+    else:
+        # POSIX: пароль через файл 0600, чтобы не светить в `ps`.
+        pw_file = os.path.join(wdir, ".rpc-pw")
+        try:
+            with open(pw_file, "w", encoding="utf-8") as f:
+                f.write(pw)
+            os.chmod(pw_file, 0o600)
+        except OSError as e:
+            if verbose:
+                print(f"⚠️  XMR: не удалось подготовить запуск: {e}")
+            return False
+        cmd += ["--password-file", pw_file]
     if verbose:
         print(f"⏳ XMR: запускаю monero-wallet-rpc (нода {daemon})…")
     try:
