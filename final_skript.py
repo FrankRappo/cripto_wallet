@@ -75,10 +75,11 @@ urllib3.disable_warnings()
 
 # === TRON-конфиг (legacy) ===
 NETWORK = "mainnet"
-API_KEY = "***REMOVED***"  # TRON-PRO-API-KEY
+API_KEY = os.environ.get("TRONGRID_API_KEY", "")  # TRON-PRO-API-KEY из .env (опционален)
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 API_BASE = "https://api.trongrid.io"
-provider = HTTPProvider(api_key=API_KEY, timeout=60)
+# Без ключа TronGrid тоже работает (ниже лимиты) — провайдер без api_key.
+provider = HTTPProvider(api_key=API_KEY, timeout=60) if API_KEY else HTTPProvider(timeout=60)
 
 MAX_FEE_LIMIT = 100_000_000  # 100 TRX
 MIN_TRX_BALANCE = 8
@@ -105,10 +106,10 @@ def tron_b58_to_hex(addr: str) -> str:
 
 
 def http_headers():
-    return {
-        "Content-Type": "application/json",
-        "TRON-PRO-API-KEY": API_KEY,
-    }
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["TRON-PRO-API-KEY"] = API_KEY
+    return headers
 
 
 def post_wallet(path: str, payload: dict) -> dict:
